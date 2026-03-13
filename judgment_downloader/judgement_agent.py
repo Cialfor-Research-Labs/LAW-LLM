@@ -2,8 +2,12 @@ import os
 import re
 import time
 import random
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus
 
+import requests
 from playwright.sync_api import sync_playwright
 
 
@@ -14,15 +18,20 @@ DOCTYPES_FILTER = "doctypes:judgments"
 RESULTS_PER_PAGE = 10
 PAUSE_AFTER_DOWNLOADS = 150
 PAUSE_SECONDS = 30
+REQUEST_TIMEOUT_SECONDS = 60
 
 DOWNLOAD_ROOT_DIR = "judgements"
 FAILED_FILE = "failed_cases.txt"
+LOG_DIR = "logs"
 
 ACT_NAMES = [
     "Indian Evidence Act",
     "Consumer Protection Act",
     "Code of Civil Procedure",
 ]
+
+thread_local = threading.local()
+failed_file_lock = threading.Lock()
 
 
 def sanitize_folder_name(name: str) -> str:
@@ -35,9 +44,81 @@ def to_absolute_url(href: str) -> str:
     return f"{BASE_URL}{href}"
 
 
+class TeeStream:
+    def __init__(self, console_stream, log_stream):
+        self.console_stream = console_stream
+        self.log_stream = log_stream
+
+    def write(self, data):
+        self.console_stream.write(data)
+        self.log_stream.write(data)
+
+    def flush(self):
+        self.console_stream.flush()
+        self.log_stream.flush()
+
+
+def setup_terminal_logging() -> tuple[str, object, object, object]:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_path = os.path.join(LOG_DIR, f"judgement_agent_{time.strftime('%Y%m%d_%H%M%S')}.log")
+
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+
+    sys.stdout = TeeStream(original_stdout, log_file)
+    sys.stderr = TeeStream(original_stderr, log_file)
+    print(f"Logging terminal output to: {log_path}")
+
+    return log_path, log_file, original_stdout, original_stderr
+
+
+def get_worker_count() -> int:
+    # Network-heavy workload: use multiple threads, bounded for stability.
+    cpu_count = os.cpu_count() or 4
+    return max(4, min(32, cpu_count * 4))
+
+
+def get_thread_session() -> requests.Session:
+    session = getattr(thread_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Accept": "*/*",
+            }
+        )
+        thread_local.session = session
+    return session
+
+
+def append_failed(act_name: str, case_url: str, reason: str) -> None:
+    with failed_file_lock:
+        with open(FAILED_FILE, "a", encoding="utf-8") as failed:
+            failed.write(f"{act_name}\t{case_url}\t{reason}\n")
+
+
 def extract_case_id(doc_url: str) -> str | None:
     match = re.search(r"/doc/(\d+)/", doc_url)
     return match.group(1) if match else None
+
+
+def extract_pdf_url_from_case_html(case_html: str, case_url: str) -> str | None:
+    patterns = [
+        r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>\s*Get in PDF\s*</a>',
+        r'<a[^>]+href=["\']([^"\']*type=pdf[^"\']*)["\']',
+        r'<a[^>]+href=["\']([^"\']*/pdf/[^"\']*)["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, case_html, flags=re.IGNORECASE)
+        if match:
+            return to_absolute_url(match.group(1))
+
+    case_id = extract_case_id(case_url)
+    if case_id:
+        return f"{BASE_URL}/doc/{case_id}/?type=pdf"
+    return None
 
 
 def case_links_file_for_act(act_name: str) -> str:
@@ -147,7 +228,7 @@ def get_full_case_link_from_result_page(page, result_page_url: str) -> str | Non
     return None
 
 
-def download_pdf_from_case_page(page, case_url: str, act_folder: str) -> bool:
+def download_pdf_from_case_page(case_url: str, act_folder: str, act_name: str) -> bool:
     case_id = extract_case_id(case_url)
     if not case_id:
         return False
@@ -157,92 +238,127 @@ def download_pdf_from_case_page(page, case_url: str, act_folder: str) -> bool:
         print(f"Already exists: {pdf_file}")
         return False
 
-    page.goto(case_url, timeout=60000)
-    page.wait_for_load_state("domcontentloaded")
-    time.sleep(random.uniform(1.0, 2.0))
-
-    pdf_button = page.locator("text=Get in PDF")
-    if pdf_button.count() == 0:
-        print(f"No PDF button found: {case_url}")
-        return False
+    session = get_thread_session()
 
     for attempt in range(3):
         try:
-            with page.expect_download(timeout=60000) as download_info:
-                pdf_button.first.click()
-            download = download_info.value
-            download.save_as(pdf_file)
+            case_res = session.get(case_url, timeout=REQUEST_TIMEOUT_SECONDS)
+            case_res.raise_for_status()
+            pdf_url = extract_pdf_url_from_case_html(case_res.text, case_url)
+            if not pdf_url:
+                append_failed(act_name, case_url, "pdf_url_not_found")
+                return False
+
+            pdf_res = session.get(pdf_url, timeout=REQUEST_TIMEOUT_SECONDS)
+            pdf_res.raise_for_status()
+            content_type = (pdf_res.headers.get("Content-Type") or "").lower()
+            if "pdf" not in content_type and not pdf_res.content.startswith(b"%PDF"):
+                append_failed(act_name, case_url, "non_pdf_response")
+                return False
+
+            temp_file = f"{pdf_file}.part"
+            with open(temp_file, "wb") as f:
+                f.write(pdf_res.content)
+            os.replace(temp_file, pdf_file)
             print(f"Downloaded: {pdf_file}")
             return True
-        except Exception:
+        except Exception as exc:
             if attempt < 2:
-                print("Retrying PDF download...")
-                time.sleep(3)
+                time.sleep(2)
+            else:
+                append_failed(act_name, case_url, f"download_error:{exc}")
 
     return False
 
 
-def run_agent() -> None:
-    os.makedirs(DOWNLOAD_ROOT_DIR, exist_ok=True)
-    successful_downloads = 0
+def download_cases_multithreaded(
+    act_name: str,
+    act_folder: str,
+    full_case_links: list[str],
+    starting_successful_downloads: int,
+) -> int:
+    workers = get_worker_count()
+    print(f"[{act_name}] Starting multithreaded downloads with {workers} threads")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            accept_downloads=True,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        )
-        page = context.new_page()
+    successful_for_act = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_case = {
+            executor.submit(download_pdf_from_case_page, case_url, act_folder, act_name): case_url
+            for case_url in full_case_links
+        }
 
-        for act_name in ACT_NAMES:
-            safe_act_name = sanitize_folder_name(act_name)
-            act_folder = os.path.join(DOWNLOAD_ROOT_DIR, safe_act_name)
-            os.makedirs(act_folder, exist_ok=True)
-
-            full_case_links = collect_full_case_links_for_act(page, act_name)
-            links_file = save_case_links_for_act(act_name, full_case_links)
-
-            print(f"[{act_name}] Saved links file: {links_file}")
-            print(f"[{act_name}] Total downloadable case links found: {len(full_case_links)}")
-
-            if not full_case_links:
-                continue
-
-            while True:
-                approval = input(
-                    f"Start downloading for '{act_name}'? "
-                    "Type yes/no: "
-                ).strip().lower()
-                if approval in {"yes", "no"}:
-                    break
-                print("Please type exactly: yes or no")
-
-            if approval == "no":
-                print(f"[{act_name}] Skipped by user.")
-                continue
-
-            for full_case_url in full_case_links:
-                try:
-                    downloaded = download_pdf_from_case_page(page, full_case_url, act_folder)
-                    if downloaded:
-                        successful_downloads += 1
-
-                    if successful_downloads > 0 and successful_downloads % PAUSE_AFTER_DOWNLOADS == 0:
+        for future in as_completed(future_to_case):
+            try:
+                downloaded = future.result()
+                if downloaded:
+                    successful_for_act += 1
+                    total_success = starting_successful_downloads + successful_for_act
+                    if total_success > 0 and total_success % PAUSE_AFTER_DOWNLOADS == 0:
                         print(
-                            f"Downloaded {successful_downloads} files. "
+                            f"Downloaded {total_success} files. "
                             f"Sleeping for {PAUSE_SECONDS} seconds..."
                         )
                         time.sleep(PAUSE_SECONDS)
+            except Exception as exc:
+                failed_case = future_to_case[future]
+                append_failed(act_name, failed_case, f"thread_error:{exc}")
 
-                    page.goto("about:blank")
-                    time.sleep(random.uniform(1.0, 2.0))
-                except Exception as exc:
-                    print(f"Error processing case page {full_case_url}: {exc}")
-                    with open(FAILED_FILE, "a", encoding="utf-8") as failed:
-                        failed.write(f"{act_name}\t{full_case_url}\n")
+    return successful_for_act
 
-        print(f"\nFinished. Total successful PDF downloads: {successful_downloads}")
-        browser.close()
+
+def run_agent() -> None:
+    _, log_file, original_stdout, original_stderr = setup_terminal_logging()
+    os.makedirs(DOWNLOAD_ROOT_DIR, exist_ok=True)
+    successful_downloads = 0
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            page = context.new_page()
+
+            for act_name in ACT_NAMES:
+                safe_act_name = sanitize_folder_name(act_name)
+                act_folder = os.path.join(DOWNLOAD_ROOT_DIR, safe_act_name)
+                os.makedirs(act_folder, exist_ok=True)
+
+                full_case_links = collect_full_case_links_for_act(page, act_name)
+                links_file = save_case_links_for_act(act_name, full_case_links)
+
+                print(f"[{act_name}] Saved links file: {links_file}")
+                print(f"[{act_name}] Total downloadable case links found: {len(full_case_links)}")
+
+                if not full_case_links:
+                    continue
+
+                while True:
+                    approval = input(
+                        f"Start downloading for '{act_name}'? "
+                        "Type yes/no: "
+                    ).strip().lower()
+                    if approval in {"yes", "no"}:
+                        break
+                    print("Please type exactly: yes or no")
+
+                if approval == "no":
+                    print(f"[{act_name}] Skipped by user.")
+                    continue
+
+                act_successes = download_cases_multithreaded(
+                    act_name=act_name,
+                    act_folder=act_folder,
+                    full_case_links=full_case_links,
+                    starting_successful_downloads=successful_downloads,
+                )
+                successful_downloads += act_successes
+                print(f"[{act_name}] Successful downloads: {act_successes}")
+
+            print(f"\nFinished. Total successful PDF downloads: {successful_downloads}")
+            browser.close()
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        log_file.close()
 
 
 if __name__ == "__main__":
