@@ -1,6 +1,0 @@
-pdfplumber
-pdf2image
-pytesseract
-tqdm
-openai
-orjson
