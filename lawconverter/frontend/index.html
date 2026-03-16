@@ -1,0 +1,204 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Law Converter</title>
+  <style>
+    :root {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #f4f6fb;
+      color: #1f2933;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .shell {
+      width: min(1080px, 100%);
+      padding: 2rem;
+      box-sizing: border-box;
+    }
+    h1 {
+      margin-bottom: 0.25rem;
+    }
+    .grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      margin-top: 1.5rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    label {
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid #d5d9e2;
+      font-size: 1rem;
+    }
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 0.65rem 0.9rem;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    #results {
+      margin-top: 1.5rem;
+      background: #fff;
+      border-radius: 12px;
+      padding: 1.25rem;
+      box-shadow: 0 15px 35px rgba(15, 23, 42, 0.12);
+      min-height: 120px;
+    }
+    .item {
+      padding: 0.8rem 1rem;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+      margin-bottom: 0.75rem;
+      background: #f9fafb;
+    }
+    .item:last-child {
+      margin-bottom: 0;
+    }
+    small {
+      color: #555b6b;
+    }
+    .status {
+      font-size: 0.95rem;
+      color: #2563eb;
+      margin-bottom: 0.5rem;
+    }
+    .error {
+      color: #dc2626;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <h1>IPC ↔ BNS Converter</h1>
+    <p>Enter a section or keyword to look up the corresponding IPC/BNS mapping without touching the terminal.</p>
+
+    <div class="grid">
+      <form class="card" data-mode="ipc">
+        <label for="ipc-query">Old IPC Section</label>
+        <input id="ipc-query" name="query" type="text" placeholder="e.g. 420" required />
+        <button type="submit">Find BNS</button>
+        <small>Exact matches are preferred but partial sections also work.</small>
+      </form>
+
+      <form class="card" data-mode="bns">
+        <label for="bns-query">New BNS Section</label>
+        <input id="bns-query" name="query" type="text" placeholder="e.g. 318(4)" required />
+        <button type="submit">Find IPC</button>
+        <small>Supports brackets and subsection formats.</small>
+      </form>
+
+      <form class="card" data-mode="subject">
+        <label for="subject-query">Subject Keyword</label>
+        <input id="subject-query" name="query" type="text" placeholder="e.g. theft" required />
+        <button type="submit">Search Subjects</button>
+        <small>Will search the subject text for your keyword.</small>
+      </form>
+    </div>
+
+    <div id="results">
+      <div class="status">Results will appear here once you search.</div>
+    </div>
+  </div>
+
+  <script>
+    const forms = document.querySelectorAll('form[data-mode]');
+    const resultsEl = document.getElementById('results');
+
+    forms.forEach((form) => {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const mode = form.dataset.mode;
+        const query = form.query.value.trim();
+        const button = form.querySelector('button');
+
+        if (!query) {
+          renderMessage('Please enter a value before searching.', true);
+          return;
+        }
+
+        button.disabled = true;
+        renderMessage('Searching…');
+
+        try {
+          const response = await fetch('/api/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode, query }),
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            renderMessage(error.error || 'Something went wrong.', true);
+          } else {
+            const payload = await response.json();
+            renderResults(payload.results, mode, query, payload.count);
+          }
+        } catch (err) {
+          renderMessage('Unable to reach the converter backend.', true);
+          console.error(err);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+
+    function renderMessage(text, isError = false) {
+      resultsEl.innerHTML = `<div class="status ${isError ? 'error' : ''}">${text}</div>`;
+    }
+
+    function renderResults(items, mode, query, count) {
+      if (!items.length) {
+        renderMessage(`No matches found for "${query}" (${mode.toUpperCase()}).`, true);
+        return;
+      }
+
+      const heading = document.createElement('div');
+      heading.className = 'status';
+      heading.textContent = `Found ${count} match${count === 1 ? '' : 'es'} for "${query}" (${mode.toUpperCase()}).`;
+
+      resultsEl.innerHTML = '';
+      resultsEl.appendChild(heading);
+
+      items.forEach((item) => {
+        const card = document.createElement('div');
+        card.className = 'item';
+        card.innerHTML = `
+          <strong>IPC:</strong> ${item.ipc_section || '—'}<br />
+          <strong>BNS:</strong> ${item.bns_section || '—'}<br />
+          <small>${item.subject || 'no subject description'}</small>
+        `;
+        resultsEl.appendChild(card);
+      });
+    }
+  </script>
+</body>
+</html>
