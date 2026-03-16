@@ -4,6 +4,7 @@ import time
 import random
 import sys
 import threading
+from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus
 
@@ -15,10 +16,317 @@ BASE_URL = "https://indiankanoon.org"
 SEARCH_URL = f"{BASE_URL}/search/"
 
 DOCTYPES = [
-    "supremecourt", "scorders", "allahabad", "andhra", "hyderabad", "amravati", "bombay", "kolkata", "kolkata_app", "chattisgarh", "delhi", "delhiorders", "gauhati", "gujarat", "himachal_pradesh", "jammu", "srinagar", "jharkhand", "karnataka", "kerala", "madhyapradesh", "manipur", "meghalaya", "chennai", "orissa", "patna", "patna_orders", "punjab", "jaipur", "jodhpur", "sikkim", "uttaranchal", "tripura", "telangana"
+    "supremecourt"
 ]
 
-YEARS = list(range(1950, 2027))
+YEARS = list(range(2000, 2001))
+
+# Act names to search per doctype
+ACT_NAMES = [
+    "Aadhaar Act",
+    "Academy of Scientific and Innovative Research Act",
+    "Acquired Territories Act",
+    "Acquisition of Certain Area at Ayodhya Act",
+    "Actuaries Act",
+    "Administrative Tribunals Act",
+    "Administrators General Act",
+    "Admiralty Act",
+    "Advocates Act",
+    "Advocates Welfare Fund Act",
+    "African Development Bank Act",
+    "African Development Fund Act",
+    "Agricultural and Processed Food Products Export Development Authority Act",
+    "Agricultural Produce Act",
+    "Agriculturists Loans Act",
+    "Air Act",
+    "Air Force Act",
+    "Airports Authority of India Act",
+    "Airports Economic Regulatory Authority of India Act",
+    "Ajmer Tenancy and Land Records Act",
+    "Aligarh Muslim University Act",
+    "All India Council for Technical Education Act",
+    "All India Institute of Medical Science Act",
+    "All India Services Act",
+    "Anand Marriage Act",
+    "Ancient Monuments and Archaeological Sites and Remains Act",
+    "Ancient Monuments Preservation Act",
+    "Andhra Pradesh and Madras Act",
+    "Andhra Pradesh and Mysore Act",
+    "Andhra Pradesh Legislative Council Act",
+    "Andhra Pradesh Reorganisation Act",
+    "Andhra State Act",
+    "Anti Apartheid Act",
+    "Anti Hijacking Act",
+    "Antiquities and Art Treasures Act",
+    "Anusandhan National Research Foundation Act",
+    "Apprentices Act",
+    "Arbitration and Conciliation Act",
+    "Architects Act",
+    "Armed Forces Act",
+    "Armed Forces Act",
+    "Armed Forces Special Powers Act",
+    "Armed Forces Special Powers Act",
+    "Armed Forces Tribunal Act",
+    "Arms Act",
+    "Army Act",
+    "Army and Air Force Act",
+    "Arya Marriage Validation Act",
+    "Asian Development Bank Act",
+    "Asiatic Society Act",
+    "Assam Act",
+    "Assam Reorganisation Act",
+    "Assam Rifles Act",
+    "Assam University Act",
+    "Assisted Reproductive Technology Act",
+    "Atomic Energy Act",
+    "Auroville Foundation Act",
+    "Authoritative Texts Act",
+    "Babasaheb Bhimrao Ambedkar University Act",
+    "Banaras Hindu University Act",
+    "Bankers Books Evidence Act",
+    "Banking Companies Act",
+    "Banking Companies Act",
+    "Banking Regulation Act",
+    "Banning of Unregulated Deposit Schemes Act",
+    "Bengal Agra and Assam Civil Courts Act",
+    "Betwa River Board Act",
+    "Bharatiya Nagarik Suraksha Sanhita",
+    "Bharatiya Nyaya Sanhita",
+    "Bharatiya Sakshya Adhiniyam",
+    "Bharatiya Vayuyan Adhiniyam",
+    "Bhopal Gas Leak Disaster Act",
+    "Bihar Reorganisation Act",
+    "Bilateral Netting of Qualified Financial Contracts Act",
+    "Biological Diversity Act",
+    "Black Money and Imposition of Tax Act",
+    "Bombay Reorganisation Act",
+    "Bonded Labour System Act",
+    "Border Security Force Act",
+    "Bureau of Indian Standards Act",
+    "Cable Television Networks Act",
+    "Cantonments Act",
+    "Carriage by Air Act",
+    "Carriage by Road Act",
+    "Central Agricultural University Act",
+    "Central Excise Act",
+    "Central Goods and Services Tax Act",
+    "Central Industrial Security Force Act",
+    "Central Reserve Police Force Act",
+    "Central Sales Tax Act",
+    "Central Universities Act",
+    "Central Vigilance Commission Act",
+    "Chartered Accountants Act",
+    "Chemical Weapons Convention Act",
+    "Child and Adolescent Labour Act",
+    "Chit Funds Act",
+    "Cigarettes and Other Tobacco Products Act",
+    "Cinematograph Act",
+    "Citizenship Act",
+    "Civil Liability for Nuclear Damage Act",
+    "Clinical Establishments Act",
+    "Co operative Societies Act",
+    "Coal Bearing Areas Act",
+    "Coal Mines Act",
+    "Coast Guard Act",
+    "Code of Civil Procedure",
+    "Code on Social Security",
+    "Code on Wages",
+    "Coffee Act",
+    "Coinage Act",
+    "Commercial Courts Act",
+    "Commissions of Inquiry Act",
+    "Companies Act",
+    "Competition Act",
+    "Conservation of Foreign Exchange and Prevention of Smuggling Activities Act",
+    "Consumer Protection Act",
+    "Contempt of Courts Act",
+    "Copyright Act",
+    "Criminal Procedure Act",
+    "Customs Act",
+    "Customs Tariff Act",
+    "Dadra and Nagar Haveli and Daman and Diu Act",
+    "Dam Safety Act",
+    "Damodar Valley Corporation Act",
+    "Delhi Development Act",
+    "Delhi High Court Act",
+    "Delhi Municipal Corporation Act",
+    "Delhi Police Act",
+    "Delhi Special Police Establishment Act",
+    "Delimitation Act",
+    "Dentists Act",
+    "Deposit Insurance and Credit Guarantee Corporation Act",
+    "Depositories Act",
+    "Designs Act",
+    "Digital Personal Data Protection Act",
+    "Disaster Management Act",
+    "Dissolution of Muslim Marriages Act",
+    "Divorce Act",
+    "Dock Workers Act",
+    "Dowry Prohibition Act",
+    "Drugs and Cosmetics Act",
+    "Drugs and Magic Remedies Act",
+    "Economic Offences Act",
+    "Electricity Act",
+    "Emigration Act",
+    "Employees Provident Funds and Miscellaneous Provisions Act",
+    "Enemy Property Act",
+    "Energy Conservation Act",
+    "Environment Act",
+    "Epidemic Diseases Act",
+    "Essential Commodities Act",
+    "Explosive Substances Act",
+    "Explosives Act",
+    "Extradition Act",
+    "Factoring Regulation Act",
+    "Family Courts Act",
+    "Fatal Accidents Act",
+    "Food Safety and Standards Act",
+    "Foreign Contribution Act",
+    "Foreign Exchange Management Act",
+    "Foreign Marriage Act",
+    "Foreign Trade Act",
+    "Forward Contracts Act",
+    "Fugitive Economic Offenders Act",
+    "General Clauses Act",
+    "General Insurance Business Act",
+    "Geographical Indications of Goods Act",
+    "Goods and Services Tax Act",
+    "Government of National Capital Territory of Delhi Act",
+    "Gram Nyayalayas Act",
+    "Guardians and Wards Act",
+    "Haj Committee Act",
+    "Hindu Adoptions and Maintenance Act",
+    "Hindu Marriage Act",
+    "Hindu Minority and Guardianship Act",
+    "Hindu Succession Act",
+    "Human Immunodeficiency Virus and Acquired Immune Deficiency Syndrome Act",
+    "Illegal Migrants Act",
+    "Immoral Traffic Act",
+    "Income tax Act",
+    "Indian Christian Marriage Act",
+    "Indian Contract Act",
+    "Indian Easements Act",
+    "Indian Forest Act",
+    "Indian Penal Code",
+    "Indian Ports Act",
+    "Indian Stamp Act",
+    "Indian Succession Act",
+    "Indian Trust Act",
+    "Industrial Disputes Act",
+    "Industrial Relations Code",
+    "Industries Act",
+    "Information Technology Act",
+    "Inland Vessels Act",
+    "Insecticides Act",
+    "Insolvency and Bankruptcy Code",
+    "Insurance Act",
+    "Insurance Regulatory and Development Authority Act",
+    "Integrated Goods and Services Tax Act",
+    "Inter State River Water Disputes Act",
+    "Jammu and Kashmir Reorganisation Act",
+    "Juvenile Justice Act",
+    "Land Acquisition Act",
+    "Legal Metrology Act",
+    "Legal Services Authorities Act",
+    "Life Insurance Corporation Act",
+    "Limitation Act",
+    "Limited Liability Partnership Act",
+    "Lokpal and Lokayuktas Act",
+    "Mahatma Gandhi National Rural Employment Guarantee Act",
+    "Maintenance and Welfare of Parents and Senior Citizens Act",
+    "Major Port Authorities Act",
+    "Marine Insurance Act",
+    "Married Womens Property Act",
+    "Mediation Act",
+    "Medical Termination of Pregnancy Act",
+    "Mental Healthcare Act",
+    "Merchant Shipping Act",
+    "Micro Small and Medium Enterprises Development Act",
+    "Mines and Minerals Act",
+    "Motor Vehicles Act",
+    "Multi State Co operative Societies Act",
+    "Muslim Personal Law Application Act",
+    "Muslim Women Act",
+    "Narcotic Drugs and Psychotropic Substances Act",
+    "National Bank for Agriculture and Rural Development Act",
+    "National Food Security Act",
+    "National Green Tribunal Act",
+    "National Highways Act",
+    "National Highways Authority of India Act",
+    "National Investigation Agency Act",
+    "National Medical Commission Act",
+    "National Security Act",
+    "Negotiable Instruments Act",
+    "Occupational Safety Health and Working Conditions Code",
+    "Official Languages Act",
+    "Official Secrets Act",
+    "Parsi Marriage and Divorce Act",
+    "Passports Act",
+    "Patents Act",
+    "Payment and Settlement Systems Act",
+    "Pension Fund Regulatory and Development Authority Act",
+    "Petroleum Act",
+    "Petroleum and Natural Gas Regulatory Board Act",
+    "Pharmacy Act",
+    "Places of Worship Act",
+    "Prevention of Corruption Act",
+    "Prevention of Damage to Public Property Act",
+    "Prevention of Money Laundering Act",
+    "Prevention of Terrorism Act",
+    "Prisoners Act",
+    "Prohibition of Benami Property Transactions Act",
+    "Prohibition of Child Marriage Act",
+    "Protection of Children from Sexual Offences Act",
+    "Protection of Human Rights Act",
+    "Protection of Women from Domestic Violence Act",
+    "Public Debt Act",
+    "Public Examinations Act",
+    "Public Liability Insurance Act",
+    "Public Premises Act",
+    "Punjab Reorganisation Act",
+    "Railway Claims Tribunal Act",
+    "Railways Act",
+    "Real Estate Act",
+    "Recovery Of Debts And Bankruptcy Act",
+    "Registration Act",
+    "Rehabilitation Council of India Act",
+    "Representation of People Act",
+    "Representation of People Act",
+    "Reserve Bank of India Act",
+    "Right of Children to Free and Compulsory Education Act",
+    "Right to Fair Compensation and Transparency in Land Acquisition Rehabilitation and Resettlement Act",
+    "Right to Information Act",
+    "Rights of Persons with Disabilities Act",
+    "Road Transport Corporations Act",
+    "SAARC Convention Act",
+    "Sashastra Seema Bal Act",
+    "Scheduled Castes and Scheduled Tribes Act",
+    "Scheduled Tribes and Other Traditional Forest Dwellers Act",
+    "Securities and Exchange Board of India Act",
+    "Securities Contracts Act",
+    "Securitisation and Reconstruction of Financial Assets and Enforcement of Security Interest Act",
+    "Seeds Act",
+    "Sexual Harassment of Women at Workplace Act",
+    "Sikh Gurdwaras Act",
+    "Slum Areas Act",
+    "Societies Registration Act",
+    "Special Economic Zones Act",
+    "Special Marriage Act",
+    "Specific Relief Act",
+    "Surrogacy Act",
+    "Telecommunications Act",
+    "Trade Marks Act",
+    "Transfer of Property Act",
+    "Transgender Persons Act",
+    "Transplantation of Human Organs and Tissues Act",
+    "Tribunals Reforms Act",
+    "Unlawful Activities Act",
+    "University Grants Commission Act",
+    "Water Act",
+    "Wealth tax Act",
+    "Wild Life Act",
+    "Women s and Children s Institutions Act",
+]
 
 RESULTS_PER_PAGE = 10
 PAUSE_AFTER_DOWNLOADS = 50
@@ -130,47 +438,44 @@ def save_case_links_for_doctype_year(doctype: str, year: int, case_links: list[s
             f.write(link + "\n")
     return links_file
 
-
-def collect_full_case_links_for_doctype_year(page, doctype: str, year: int) -> list[str]:
-    case_links = collect_case_links_from_search(page, doctype, year)
-    print(f"[{doctype} {year}] Total case links found: {len(case_links)}")
-
-    # Remove duplicates based on case_id
-    seen_case_ids: set[str] = set()
-    unique_case_links: list[str] = []
-
-    for case_url in case_links:
-        case_id = extract_case_id(case_url)
-        if case_id and case_id not in seen_case_ids:
-            seen_case_ids.add(case_id)
-            unique_case_links.append(case_url)
-
-    return unique_case_links
+import calendar
 
 
-def collect_case_links_from_search(page, doctype: str, year: int) -> list[str]:
-    query = f"doctypes:{doctype} year:{year}"
+def build_act_url(doctype: str, act_name: str, page_num: int = 0) -> str:
+    """Build Indian Kanoon URL with quoted act name in formInput and doctype filter, no dates."""
+    encoded_term = quote_plus(f'"{act_name}"')
+    base = (
+        f"{SEARCH_URL}"
+        f"?formInput={encoded_term}"       # formInput="Arbitration and Conciliation Act 1996"
+        f"&filters=doctypes%3A+{doctype}"  # filters=doctypes: supremecourt
+    )
+    if page_num > 0:
+        base += f"&pagenum={page_num}"
+    return base
+
+
+def paginate_act(page, doctype: str, act_name: str) -> list[str]:
+    """Paginate all results for a single act name search. Returns raw case URLs."""
+    label = f"{doctype}/{act_name[:40]}"
     case_links: list[str] = []
-
-    print("\n=================================")
-    print(f"Searching doctype: {doctype}, year: {year}")
-    print(f"Query: {query}")
-    print("=================================")
-
     page_num = 0
+
     while True:
+        url = build_act_url(doctype, act_name, page_num)
+
         if page_num == 0:
-            url = f"{SEARCH_URL}?formInput={quote_plus(query)}"
-        else:
-            url = f"{SEARCH_URL}?formInput={quote_plus(query)}&pagenum={page_num}"
-        
+            print(f"\n=================================")
+            print(f"  Searching: {act_name}")
+            print(f"  {url}")
+            print(f"=================================")
+
         page.goto(url, timeout=60000)
         page.wait_for_load_state("domcontentloaded")
         time.sleep(random.uniform(1.5, 3.0))
 
         results = page.locator("a[href*='/docfragment/']")
         count = results.count()
-        print(f"[{doctype} {year}] Page {page_num + 1}: {count} results")
+        print(f"  [{label}] Page {page_num + 1}: {count} links")
 
         if count == 0:
             break
@@ -184,8 +489,32 @@ def collect_case_links_from_search(page, doctype: str, year: int) -> list[str]:
             break
         page_num += 1
 
+    print(f"  [{label}] Subtotal: {len(case_links)} links")
     return case_links
 
+
+def collect_all_case_links_for_doctype(page, doctype: str) -> list[str]:
+    """Scrape each Act Name and deduplicate results by case_id."""
+    all_links: list[str] = []
+
+    for act_name in ACT_NAMES:
+        links = paginate_act(page, doctype, act_name)
+        all_links.extend(links)
+
+    print(f"\n[{doctype}] Raw links across all acts: {len(all_links)}")
+
+    # Deduplicate by case_id
+    seen_case_ids: set[str] = set()
+    unique_case_links: list[str] = []
+
+    for case_url in all_links:
+        case_id = extract_case_id(case_url)
+        if case_id and case_id not in seen_case_ids:
+            seen_case_ids.add(case_id)
+            unique_case_links.append(case_url)
+
+    print(f"[{doctype}] Unique case links after dedup: {len(unique_case_links)}")
+    return unique_case_links
 
 
 def download_pdf_from_case_page(case_url: str, folder: str, doctype: str, year: int) -> bool:
@@ -263,6 +592,14 @@ def download_cases_multithreaded(
     return successful_for_doctype_year
 
 
+def save_case_links_for_doctype(doctype: str, case_links: list[str]) -> str:
+    links_file = f"case_links_{doctype}.txt"
+    with open(links_file, "w", encoding="utf-8") as f:
+        for link in case_links:
+            f.write(link + "\n")
+    return links_file
+
+
 def run_agent() -> None:
     _, log_file, original_stdout, original_stderr = setup_terminal_logging()
     os.makedirs(DOWNLOAD_ROOT_DIR, exist_ok=True)
@@ -275,41 +612,40 @@ def run_agent() -> None:
             page = context.new_page()
 
             for doctype in DOCTYPES:
-                for year in YEARS:
-                    folder = os.path.join(DOWNLOAD_ROOT_DIR, doctype, str(year))
-                    os.makedirs(folder, exist_ok=True)
+                folder = os.path.join(DOWNLOAD_ROOT_DIR, doctype)
+                os.makedirs(folder, exist_ok=True)
 
-                    full_case_links = collect_full_case_links_for_doctype_year(page, doctype, year)
-                    links_file = save_case_links_for_doctype_year(doctype, year, full_case_links)
+                full_case_links = collect_all_case_links_for_doctype(page, doctype)
+                links_file = save_case_links_for_doctype(doctype, full_case_links)
 
-                    print(f"[{doctype} {year}] Saved links file: {links_file}")
-                    print(f"[{doctype} {year}] Total downloadable case links found: {len(full_case_links)}")
+                print(f"[{doctype}] Saved links file: {links_file}")
+                print(f"[{doctype}] Total downloadable case links found: {len(full_case_links)}")
 
-                    if not full_case_links:
-                        continue
+                if not full_case_links:
+                    continue
 
-                    while True:
-                        approval = input(
-                            f"Start downloading for '{doctype} {year}'? "
-                            "Type yes/no: "
-                        ).strip().lower()
-                        if approval in {"yes", "no"}:
-                            break
-                        print("Please type exactly: yes or no")
+                while True:
+                    approval = input(
+                        f"Start downloading for '{doctype}'? "
+                        "Type yes/no: "
+                    ).strip().lower()
+                    if approval in {"yes", "no"}:
+                        break
+                    print("Please type exactly: yes or no")
 
-                    if approval == "no":
-                        print(f"[{doctype} {year}] Skipped by user.")
-                        continue
+                if approval == "no":
+                    print(f"[{doctype}] Skipped by user.")
+                    continue
 
-                    successes = download_cases_multithreaded(
-                        doctype=doctype,
-                        year=year,
-                        folder=folder,
-                        full_case_links=full_case_links,
-                        starting_successful_downloads=successful_downloads,
-                    )
-                    successful_downloads += successes
-                    print(f"[{doctype} {year}] Successful downloads: {successes}")
+                successes = download_cases_multithreaded(
+                    doctype=doctype,
+                    year=0,
+                    folder=folder,
+                    full_case_links=full_case_links,
+                    starting_successful_downloads=successful_downloads,
+                )
+                successful_downloads += successes
+                print(f"[{doctype}] Successful downloads: {successes}")
 
             print(f"\nFinished. Total successful PDF downloads: {successful_downloads}")
             browser.close()
